@@ -1,8 +1,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "driver/gpio.h"
-#include "esp_log.h"
+#include <driver/gpio.h>
+#include <driver/timer.h>
+#include <esp_log.h>
 
 #include "button.h"
 #include "internal/esp32-button.h"
@@ -13,20 +14,63 @@ extern debounce_t * debounce;
 extern QueueHandle_t queue;
 
 static gpio_isr_handle_t isr_handle;
+static timer_isr_handle_t timer_isr_handle;
+
+static unsigned down_events = 0;
 
 static const char* TAG = "esp32 Button ISR";
 
-static void update_button(debounce_t *d, uint32_t level) {
+static void update_button_history(debounce_t *d, 
+    unsigned time_passage,
+    uint32_t level) {
+    do {
+        d->history <<= 1;
+        d->history |= level;
+    } while(--time_passage);
+}
+
+static void update_button(debounce_t *d, 
+    uint32_t level) {
     d->history = (d->history << 1) | level;
 }
 
-static void send_event(debounce_t db, int ev) {
+static void send_event(debounce_t* db, int ev) {
     button_event_t event = {
-        .pin = db.pin,
+        .pin = db->pin,
         .event = ev,
     };
-    xQueueSendToBackFromISR(queue, &event, NULL);
+    BaseType_t rtosResult = xQueueSendToBackFromISR(queue, &event, NULL);
+
+    // DEBT: Wrap this in DEBUG mode #ifdef
+    if(rtosResult == errQUEUE_FULL)
+        ets_printf("ISR send_event queue full");
 }
+
+#define MASK   0b1111000000111111
+static bool button_rose(debounce_t *d) {
+    if ((d->history & MASK) == 0b0000000000111111) {
+        d->history = 0xffff;
+        return 1;
+    }
+    return 0;
+}
+static bool button_fell(debounce_t *d) {
+    if ((d->history & MASK) == 0b1111000000000000) {
+        d->history = 0x0000;
+        return 1;
+    }
+    return 0;
+}
+static bool button_down(debounce_t *d) {
+    if (d->inverted) return button_fell(d);
+    return button_rose(d);
+}
+static bool button_up(debounce_t *d) {
+    if (d->inverted) return button_rose(d);
+    return button_fell(d);
+}
+
+static unsigned threshold_ms = 50;
 
 // FIX: Not valid for multiple buttons and not debouncing anything at all
 // Just getting things compiling and running for now
@@ -40,20 +84,44 @@ static void button_isr(void* context) {
     SET_PERI_REG_MASK(GPIO_STATUS_W1TC_REG, gpio_intr_status);    //Clear intr for gpio0-gpio31
     SET_PERI_REG_MASK(GPIO_STATUS1_W1TC_REG, gpio_intr_status_h); //Clear intr for gpio32-39
 
-    //ets_printf("1 Intr GPIO%d ,val: %d\n",gpio_num,gpio_get_level(gpio_num));
+    // https://www.esp32.com/viewtopic.php?t=20123 indicates we can call this here
+    uint32_t millis = esp_timer_get_time() / 1000;
+
     ets_printf("1 Intr\n");
 
-    button_event_t event = {
-        .pin = 0,
-        .event = BUTTON_DOWN,
-    };
-    xQueueSendToBackFromISR(queue, &event, NULL);
-
-    ets_printf("2 Intr: pin_count=%d\n", pin_count);
-
     for (int idx=0; idx<pin_count; idx++) {
-        //update_button(&debounce[idx], gpio_intr_status);
-        send_event(debounce[idx], BUTTON_DOWN);
+        uint32_t gpio_num = 0;
+        if(gpio_intr_status & BIT(gpio_num)) { //gpio0-gpio31
+            debounce_t* const d =  &debounce[idx];
+            int level = gpio_get_level(gpio_num);
+
+            ets_printf("1 Intr GPIO%d, val: %d\n",gpio_num, level);
+            unsigned time_passage;
+
+            if(d->down_time != 0)
+            {
+                time_passage = (millis - d->down_time) / threshold_ms;
+            }
+            else
+                time_passage = 1;
+
+            // backfill all the passed time with previous level setting
+            if(time_passage > 1) {
+                // We may get way past our window.  Make sure we don't
+                // flip out in that case
+                if(time_passage < 32)
+                    update_button_history(d, time_passage, !level);
+                else
+                    // FIX: Not correct here
+                    update_button_history(d, 32, !level);
+            }
+
+            update_button(d, level);
+
+            d->down_time = millis;
+            ++down_events;
+            //send_event(d, BUTTON_DOWN);
+        }
     }
 }
 
@@ -107,8 +175,42 @@ QueueHandle_t esp32_button_init_internal(
     return queue;
 }
 
+// Guidance from
+// https://www.esp32.com/viewtopic.php?t=12931 
+static void IRAM_ATTR timer_group0_isr (void *param){
+    TIMERG0.int_clr_timers.t0 = 1; //clear interrupt bit
+
+    uint32_t millis = esp_timer_get_time() / 1000;
+
+    if(down_events > 0) {
+        for (int idx=0; idx<pin_count; idx++) {
+            debounce_t* const d =  &debounce[idx];
+        }
+    }
+}
+
 QueueHandle_t button_init_isr(unsigned long long pin_select) {
     QueueHandle_t queue = esp32_button_init_internal(pin_select, GPIO_FLOATING);
+    
+    timer_config_t timer;
+    int timer_group = TIMER_GROUP_0;
+    
+    // Set prescaler for 10 KHz clock.  We'd go slower if we could, but:
+    // "The divider’s range is from from 2 to 65536."
+    timer.divider = 8000; 
+
+    timer.counter_dir = TIMER_COUNT_UP;
+    timer.alarm_en = 1;
+    timer.intr_type = TIMER_INTR_LEVEL;
+    timer.auto_reload = TIMER_AUTORELOAD_EN; // Reset timer to 0 when end condition is triggered
+    timer.counter_en = TIMER_PAUSE;
+
+    timer_init(timer_group, 0, &timer);
+    timer_set_counter_value(timer_group, 0, 0);
+    timer_isr_register(timer_group, 0, timer_group0_isr, NULL, 
+        ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,
+        &timer_isr_handle);
+
     return queue;
 }
 

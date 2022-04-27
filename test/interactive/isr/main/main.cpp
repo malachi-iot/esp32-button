@@ -25,9 +25,13 @@ extern "C" void app_main(void)
 
     for(;;)
     {
+        static int counter = 0;
+
         button_event_t ev;
 
-        if(xQueueReceive(button_events, &ev, 1000 / portTICK_PERIOD_MS))
-            ESP_LOGD(TAG, "ev.pin=%d, ev.event=%d", ev.pin, ev.event);
+        if(xQueueReceive(button_events, &ev, 5000 / portTICK_PERIOD_MS))
+            ESP_LOGI(TAG, "ev.pin=%d, ev.event=%d", ev.pin, ev.event);
+        else
+            ESP_LOGD(TAG, "Counting = %d", ++counter);
     }
 }
