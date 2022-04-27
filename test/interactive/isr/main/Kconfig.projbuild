@@ -1,0 +1,7 @@
+menu "ESP32 Button: Basic interactive test"
+
+config INTERACTIVE_BUTTON_GPIO
+    int "Which GPIO the button is on"
+    default 0
+
+endmenu

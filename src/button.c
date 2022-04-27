@@ -10,16 +10,9 @@
 #include "esp_log.h"
 
 #include "button.h"
+#include "internal/esp32-button.h"
 
 #define TAG "BUTTON"
-
-typedef struct {
-  uint8_t pin;
-  bool inverted;
-  uint16_t history;
-  uint32_t down_time;
-  uint32_t next_long_time;
-} debounce_t;
 
 int pin_count = -1;
 debounce_t * debounce;
@@ -139,4 +132,12 @@ QueueHandle_t pulled_button_init(unsigned long long pin_select, gpio_pull_mode_t
     xTaskCreate(&button_task, "button_task", CONFIG_ESP32_BUTTON_TASK_STACK_SIZE, NULL, 10, NULL);
 
     return queue;
+}
+
+
+void button_deinit()
+{
+    pin_count = -1;
+    vQueueDelete(queue);
+    free(debounce);
 }
