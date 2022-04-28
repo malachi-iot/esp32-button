@@ -85,8 +85,7 @@ static uint32_t g_gpio_intr_status, g_gpio_intr_status_h;
 // NOTE: gpio_ll_get_level looks pretty quick, so not pursuing this optimization
 //static uint32_t gpio_status;
 
-// FIX: Not valid for multiple buttons and not debouncing anything at all
-// Just getting things compiling and running for now
+// TODO: Ensure we don't reenter this.  If we do, wrap up with some crit sections
 static void gpio_isr(void* context) {
     // Guidance from:
     // https://esp32.com/viewtopic.php?t=345 
@@ -168,8 +167,7 @@ static void gpio_isr(void* context) {
                 // Interrupt mechanism itself
                 // also is not debounced, so we need to track if this pin already
                 // got a down event
-                if(!d->flags.down_isr_triggerred)
-                {
+                if(!d->flags.down_isr_triggerred) {
                     ++down_events;
                     if(up_events > 0)
                         --up_events;
@@ -185,11 +183,10 @@ static void gpio_isr(void* context) {
     ets_printf("3 Intr up=%d, down=%d, debounced_up=%d, debounced_down=%d\n", 
         up_events, down_events, debounced_up_events, debounced_down);
 
-    if(down_events > 0)
-    {
+    if(down_events > 0) {
+        // TODO: Consider doing a timer restart if we can, so that we can
+        // not risk losing the gpio level (apply it immediately here in this ISR)
         timer_set_alarm(timer_group, 0, 1);
-        //timer_set_alarm_value(timer_group, 0, 100);
-        //timer_start(timer_group,0);
     }
 
     /* Will never get here because debouncing happens after timer determines it
@@ -259,6 +256,7 @@ static void IRAM_ATTR timer_group0_isr (void *param){
 
     // DEBT: This is an expensive call, and we can compute
     // the time pretty handily by inspecting our own timer instead
+    // as per https://esp32.com/viewtopic.php?t=16228
     uint32_t millis = esp_timer_get_time() / 1000;
 
     // FIX: This ets_printf is intermittent, get to the bottom of why
