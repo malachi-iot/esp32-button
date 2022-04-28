@@ -173,6 +173,7 @@ static void gpio_isr(void* context) {
                         --up_events;
                     d->flags.down_isr_triggerred = 1;
                     d->flags.up_isr_triggerred = 0;
+                    d->down_time_bouncey = millis;
                 }
 
                 //gpio_status &= ~bit_pin;
@@ -258,6 +259,12 @@ static void IRAM_ATTR timer_group0_isr (void *param){
     // the time pretty handily by inspecting our own timer instead
     // as per https://esp32.com/viewtopic.php?t=16228
     uint32_t millis = esp_timer_get_time() / 1000;
+
+    // TODO: Move away from this semi-polling approach and instead
+    // evaluate against start_window_bouncey.  Consider retaining
+    // millis from this timer and turn timer into an always-runner
+    // which exits quicky if nothing to be serviced -- kind of a
+    // pseudo-scheduler
 
     // FIX: This ets_printf is intermittent, get to the bottom of why
     if(millis % 1000 == 0) {

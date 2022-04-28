@@ -15,4 +15,6 @@ typedef struct {
   uint16_t history;
   uint32_t down_time;
   uint32_t next_long_time;
+
+  uint32_t start_window_bouncey;
 } debounce_t;
