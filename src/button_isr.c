@@ -332,6 +332,9 @@ static void IRAM_ATTR timer_group0_isr (void *param){
     bool enable_timer = down_events > 0 || (debounced_up_events != pin_count);
     TIMERG0.hw_timer[0].config.alarm_en = enable_timer;
 
+    if(!enable_timer)
+        ets_printf("3 Timer disabling\n");
+
     // TODO: Optimize above for condition where debounced_down has happened for all
     // debounce down candidates, so technically we're only looking for up ISR
 }
