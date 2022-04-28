@@ -12,6 +12,8 @@ config ESP32_BUTTON_LONG_PRESS_REPEAT_MS
     help
         Defines in which interval BUTTON_HELD events are generated while a button is long pressed.
 
+        For ISR usage, this can be set to 0 in which case no repeated BUTTON_HELD events appear
+
 config ESP32_BUTTON_QUEUE_SIZE
     int "Size of the button event queue"
     default 4
